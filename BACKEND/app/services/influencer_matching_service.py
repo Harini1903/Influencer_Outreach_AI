@@ -1,4 +1,5 @@
 import json
+import re
 
 from app.services.hybrid_retrieval_service import (
     hybrid_search_influencers
@@ -91,7 +92,6 @@ IMPORTANT INSTRUCTIONS:
 11. Prefer reasonable matches over returning an empty result.
 
 RECOMMENDATION LABELS:
-
 80-100 = Strong Match
 60-79 = Good Match
 40-59 = Moderate Match
@@ -100,7 +100,6 @@ RECOMMENDATION LABELS:
 RETURN VALID JSON ONLY.
 
 FORMAT:
-
 {{
     "matches": [
         {{
@@ -136,21 +135,26 @@ FORMAT:
             "LLM returned an empty matching response."
         )
 
-    # Remove markdown JSON fences if the model adds them
-    if response_text.startswith("```"):
-        response_text = (
-            response_text
-            .replace("```json", "")
-            .replace("```", "")
-            .strip()
-        )
+    # ------------------------------------------------------------------
+    # Robust JSON extraction: handles preamble, markdown fences, and remarks
+    # ------------------------------------------------------------------
+    cleaned_text = response_text
+
+    # 1. Match code fence ```json ... ``` anywhere in the response
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text, re.IGNORECASE)
+    if fence_match:
+        cleaned_text = fence_match.group(1).strip()
+    else:
+        # 2. Match outermost JSON object { ... }
+        brace_match = re.search(r"\{[\s\S]*\}", response_text)
+        if brace_match:
+            cleaned_text = brace_match.group(0).strip()
 
     try:
-        result = json.loads(response_text)
-
+        result = json.loads(cleaned_text)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            "LLM returned an invalid JSON matching response."
+            f"LLM returned an invalid JSON matching response. Raw response: {response_text[:300]}"
         ) from exc
 
     if not isinstance(result, dict):
@@ -173,11 +177,9 @@ FORMAT:
     }
 
     validated_matches = []
-
     seen_ids = set()
 
     for match in result["matches"]:
-
         if not isinstance(match, dict):
             continue
 
@@ -195,7 +197,6 @@ FORMAT:
             score = float(
                 match.get("match_score")
             )
-
         except (
             TypeError,
             ValueError
@@ -209,13 +210,10 @@ FORMAT:
 
         if score >= 80:
             recommendation = "Strong Match"
-
         elif score >= 60:
             recommendation = "Good Match"
-
         elif score >= 40:
             recommendation = "Moderate Match"
-
         else:
             recommendation = "Low Match"
 
@@ -316,7 +314,6 @@ async def match_influencers_to_campaign(
         30,
         limit * 3
     )
-
     retrieval_limit = min(
         retrieval_limit,
         50
@@ -324,29 +321,22 @@ async def match_influencers_to_campaign(
 
     candidates = hybrid_search_influencers(
         query=query,
-
         # Do NOT hard-filter niche
         niche=None,
-
         # Do NOT hard-filter location
         location=None,
-
         platform=campaign.get(
             "platform"
         ),
-
         min_followers=campaign.get(
             "min_followers"
         ),
-
         max_followers=campaign.get(
             "max_followers"
         ),
-
         min_engagement=campaign.get(
             "min_engagement"
         ),
-
         limit=retrieval_limit
     )
 
@@ -364,7 +354,6 @@ async def match_influencers_to_campaign(
     # --------------------------------------------------
     # AI EVALUATION
     # --------------------------------------------------
-
     matches = await evaluate_influencer_matches(
         campaign=campaign,
         candidates=candidates
@@ -373,7 +362,6 @@ async def match_influencers_to_campaign(
     # --------------------------------------------------
     # FINAL RESULTS
     # --------------------------------------------------
-
     final_matches = matches[:limit]
 
     return {
