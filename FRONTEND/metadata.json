@@ -1,0 +1,6 @@
+{
+  "name": "Influencer Outreach AI",
+  "description": "AI-powered SaaS platform for discovering creators, matching campaigns, and generating personalized outreach.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
