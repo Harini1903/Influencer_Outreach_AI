@@ -1,8 +1,7 @@
-
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
 from app.models.influencer import Influencer
@@ -14,7 +13,7 @@ from app.services.youtube_service import (
 )
 
 
-# Initial filtering criteria
+# Discovery filtering criteria
 MIN_SUBSCRIBERS = 5000
 MAX_SUBSCRIBERS = 100000
 MIN_INTERACTION_RATE = 1.0
@@ -35,12 +34,16 @@ def parse_youtube_date(date_string):
 
 
 def filter_influencers(records):
-    """Filter discovered influencers using campaign criteria."""
+    """
+    Filter only the influencers that actually satisfy
+    the live discovery criteria.
+    """
 
     qualified = []
 
-    cutoff_date = datetime.now(timezone.utc) - timedelta(
-        days=MAX_INACTIVE_DAYS
+    cutoff_date = (
+        datetime.now(timezone.utc)
+        - timedelta(days=MAX_INACTIVE_DAYS)
     )
 
     for record in records:
@@ -54,7 +57,7 @@ def filter_influencers(records):
             record.get("latest_upload")
         )
 
-        # Subscriber count must be publicly available
+        # Subscriber count must be available
         if subscribers is None:
             continue
 
@@ -70,7 +73,10 @@ def filter_influencers(records):
         if videos_analysed < MIN_VIDEOS_ANALYSED:
             continue
 
-        if latest_upload is None or latest_upload < cutoff_date:
+        if latest_upload is None:
+            continue
+
+        if latest_upload < cutoff_date:
             continue
 
         qualified.append(record)
@@ -79,21 +85,34 @@ def filter_influencers(records):
 
 
 def save_influencers(records, niche):
-    """Insert new influencers or update existing YouTube records."""
+    """
+    Insert/update YouTube influencers in the database.
+
+    IMPORTANT:
+    This function now returns the actual database records
+    corresponding to the influencers discovered in THIS search.
+    """
 
     if not records:
-        return 0
+        return []
 
     db = SessionLocal()
 
     try:
+
         db_records = []
+
+        channel_ids = []
 
         for record in records:
 
+            channel_id = record["channel_id"]
+
+            channel_ids.append(channel_id)
+
             db_records.append({
-                "username": record["channel_id"],
-                "channel_id": record["channel_id"],
+                "username": channel_id,
+                "channel_id": channel_id,
                 "platform": "youtube",
                 "full_name": record.get("channel_name"),
                 "email": record.get("business_email"),
@@ -110,14 +129,18 @@ def save_influencers(records, niche):
                 )
             })
 
-        # Avoid duplicate records using username + platform
+        # Insert or update existing YouTube influencer
         statement = insert(Influencer).values(db_records)
 
         statement = statement.on_conflict_do_update(
             index_elements=["username", "platform"],
             set_={
+                "channel_id": statement.excluded.channel_id,
                 "full_name": statement.excluded.full_name,
-                "email": func.coalesce(statement.excluded.email, Influencer.email),
+                "email": func.coalesce(
+                    statement.excluded.email,
+                    Influencer.email
+                ),
                 "bio": statement.excluded.bio,
                 "niche": statement.excluded.niche,
                 "location": statement.excluded.location,
@@ -134,7 +157,17 @@ def save_influencers(records, niche):
         db.execute(statement)
         db.commit()
 
-        return len(db_records)
+        # Fetch ONLY the influencers from this discovery request
+        saved_influencers = db.execute(
+            select(Influencer)
+            .where(
+                Influencer.channel_id.in_(channel_ids),
+                Influencer.platform == "youtube"
+            )
+            .order_by(Influencer.id.desc())
+        ).scalars().all()
+
+        return saved_influencers
 
     except Exception:
         db.rollback()
@@ -144,52 +177,125 @@ def save_influencers(records, niche):
         db.close()
 
 
+def serialize_influencer(influencer):
+    """
+    Convert SQLAlchemy Influencer object into JSON-safe data
+    for the frontend.
+    """
+
+    return {
+        "id": influencer.id,
+        "channel_id": influencer.channel_id,
+        "username": influencer.username,
+        "platform": influencer.platform,
+        "full_name": influencer.full_name,
+        "email": influencer.email,
+        "bio": influencer.bio,
+        "niche": influencer.niche,
+        "location": influencer.location,
+        "follower_count": influencer.follower_count,
+        "engagement_rate": (
+            float(influencer.engagement_rate)
+            if influencer.engagement_rate is not None
+            else None
+        ),
+        "average_views": (
+            float(influencer.average_views)
+            if influencer.average_views is not None
+            else None
+        ),
+        "videos_analysed": influencer.videos_analysed,
+        "last_upload_at": (
+            influencer.last_upload_at.isoformat()
+            if influencer.last_upload_at
+            else None
+        ),
+        "profile_url": influencer.profile_url
+    }
+
+
 def collect_and_save_influencers(
     keyword: str,
     niche: str,
     max_results: int = 50
 ):
     """
-    Complete pipeline:
-    YouTube discovery -> channel details -> video metrics
-    -> filtering -> Supabase storage.
+    LIVE DISCOVERY PIPELINE
+
+    YouTube search
+        ↓
+    Channel details
+        ↓
+    Recent video metrics
+        ↓
+    Filtering
+        ↓
+    Save/update database
+        ↓
+    Return ONLY influencers found in this search
     """
 
     print(f"Searching YouTube for: {keyword}")
 
-    # 1. Discover channels
-    channels = search_channels(keyword, max_results)
+    # --------------------------------------------------
+    # 1. SEARCH YOUTUBE
+    # --------------------------------------------------
 
-    print(f"Channels discovered: {len(channels)}")
+    channels = search_channels(
+        keyword,
+        max_results
+    )
+
+    print(
+        f"Channels discovered from YouTube: {len(channels)}"
+    )
 
     if not channels:
         return {
             "discovered": 0,
             "qualified": 0,
-            "saved": 0
+            "saved": 0,
+            "influencers": []
         }
 
-    # 2. Retrieve channel details
+    # --------------------------------------------------
+    # 2. GET CHANNEL DETAILS
+    # --------------------------------------------------
+
     channel_ids = [
-        channel["channel_id"] for channel in channels
+        channel["channel_id"]
+        for channel in channels
     ]
 
-    details = get_channel_details(channel_ids)
+    details = get_channel_details(
+        channel_ids
+    )
 
-    # 3. Retrieve recent video metrics
-    metrics = get_recent_video_metrics(details, max_videos=10)
+    # --------------------------------------------------
+    # 3. GET RECENT VIDEO METRICS
+    # --------------------------------------------------
+
+    metrics = get_recent_video_metrics(
+        details,
+        max_videos=10
+    )
 
     metrics_by_id = {
-        item["channel_id"]: item for item in metrics
+        item["channel_id"]: item
+        for item in metrics
     }
 
-    # 4. Combine channel details and metrics
+    # --------------------------------------------------
+    # 4. COMBINE DATA
+    # --------------------------------------------------
+
     combined_records = []
 
     for channel in details:
 
         video_metrics = metrics_by_id.get(
-            channel["channel_id"], {}
+            channel["channel_id"],
+            {}
         )
 
         combined = {
@@ -199,21 +305,40 @@ def collect_and_save_influencers(
 
         combined_records.append(combined)
 
-    # 5. Apply filtering criteria
+    # --------------------------------------------------
+    # 5. FILTER LIVE RESULTS
+    # --------------------------------------------------
+
     qualified_records = filter_influencers(
         combined_records
     )
 
-    print(f"Qualified influencers: {len(qualified_records)}")
+    print(
+        f"Qualified live influencers: "
+        f"{len(qualified_records)}"
+    )
 
-    # 6. Save qualified records in Supabase
-    saved_count = save_influencers(
+    # --------------------------------------------------
+    # 6. SAVE + FETCH ONLY THIS SEARCH'S RESULTS
+    # --------------------------------------------------
+
+    saved_influencers = save_influencers(
         qualified_records,
         niche
     )
 
+    # --------------------------------------------------
+    # 7. RETURN ACTUAL LIVE RESULTS
+    # --------------------------------------------------
+
+    serialized = [
+        serialize_influencer(influencer)
+        for influencer in saved_influencers
+    ]
+
     return {
         "discovered": len(combined_records),
         "qualified": len(qualified_records),
-        "saved": saved_count
+        "saved": len(saved_influencers),
+        "influencers": serialized
     }

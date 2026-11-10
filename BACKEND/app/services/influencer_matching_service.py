@@ -1,7 +1,9 @@
 import json
-from typing import Any
 
-from app.services.hybrid_retrieval_service import hybrid_search_influencers
+from app.services.hybrid_retrieval_service import (
+    hybrid_search_influencers
+)
+
 from app.ai.chat import chat
 
 
@@ -38,120 +40,66 @@ async def evaluate_influencer_matches(
     campaign: dict,
     candidates: list[dict]
 ) -> list[dict]:
-    """
-    Evaluate ALL retrieved influencers using the configured LLM.
-
-    Important:
-    The LLM must evaluate every supplied candidate.
-    Campaign requirements such as followers, engagement and
-    location are treated as ranking factors rather than
-    automatic exclusion rules.
-    """
 
     if not candidates:
         return []
 
     prompt = f"""
-You are an expert influencer marketing analyst for an AI-powered
-influencer discovery SaaS platform.
+You are an expert influencer marketing analyst.
 
-Your job is to RANK influencer candidates against a brand campaign.
+Evaluate ALL influencer candidates against the campaign.
 
-==================================================
-CAMPAIGN REQUIREMENTS
-==================================================
-
+CAMPAIGN REQUIREMENTS:
 {json.dumps(campaign, indent=2, default=str)}
 
-==================================================
-INFLUENCER CANDIDATES
-==================================================
-
+AVAILABLE INFLUENCER CANDIDATES:
 {json.dumps(candidates, indent=2, default=str)}
 
-==================================================
-IMPORTANT MATCHING RULES
-==================================================
+IMPORTANT INSTRUCTIONS:
 
-Evaluate EVERY influencer in the supplied candidate list.
+1. Evaluate EVERY candidate provided.
 
-Do NOT remove candidates simply because they are not a perfect match.
+2. Do NOT return only the strongest few.
 
-The goal is to rank the candidates from best to worst.
+3. Return candidates that have meaningful relevance,
+   even if they are not perfect matches.
 
-Use the following factors:
+4. Rank all candidates from highest to lowest score.
 
-1. Niche relevance
-2. Campaign/content relevance
-3. Audience relevance
-4. Follower count suitability
-5. Engagement rate
-6. Location suitability
-7. Platform suitability
-8. Overall campaign fit
+5. Give every candidate a match_score between 0 and 100.
 
-Campaign requirements are ranking signals.
+6. Consider:
+   - niche relevance
+   - campaign relevance
+   - audience relevance
+   - content relevance
+   - follower count
+   - engagement rate
+   - location
+   - platform
 
-For example:
+7. Do NOT invent information.
 
-- If the campaign asks for Chennai creators, Chennai creators
-  should score higher, but creators from another location should
-  NOT automatically be removed.
+8. If information is unavailable, say so.
 
-- If the campaign asks for a minimum follower count, creators
-  below that requirement can still be returned with a lower score.
+9. Vector similarity is only a retrieval signal.
+   It must NOT be used as the final match score.
 
-- If engagement is below the requested threshold, reduce the score
-  appropriately instead of automatically excluding the creator.
+10. A candidate does NOT need to satisfy every campaign
+    requirement to be returned.
 
-- If information is unavailable, do NOT invent it.
+11. Prefer reasonable matches over returning an empty result.
 
-- Never invent follower counts, engagement rates, locations,
-  audience demographics, niches, or other profile information.
+RECOMMENDATION LABELS:
 
-==================================================
-MATCH SCORE
-==================================================
+80-100 = Strong Match
+60-79 = Good Match
+40-59 = Moderate Match
+0-39 = Low Match
 
-Give every candidate a match_score between 0 and 100.
+RETURN VALID JSON ONLY.
 
-Use this general interpretation:
-
-90-100 = Excellent campaign fit
-80-89  = Strong Match
-70-79  = Good Match
-60-69  = Potential Match
-40-59  = Moderate Match
-0-39   = Low Match
-
-Do not give every influencer the same score.
-
-Rank candidates according to their actual campaign relevance.
-
-==================================================
-CRITICAL REQUIREMENT
-==================================================
-
-You MUST return an entry for EVERY influencer supplied
-in the candidate list.
-
-Do not return only the best few.
-
-If there are 13 candidates, return exactly 13 match entries.
-
-If there are 10 candidates, return exactly 10 match entries.
-
-The candidate IDs must come directly from the supplied candidates.
-
-Never invent an influencer ID.
-
-==================================================
-RESPONSE FORMAT
-==================================================
-
-Return valid JSON only.
-
-Use exactly this structure:
+FORMAT:
 
 {{
     "matches": [
@@ -160,51 +108,42 @@ Use exactly this structure:
             "match_score": 85,
             "recommendation": "Strong Match",
             "reasons": [
-                "Relevant niche",
-                "Good campaign alignment"
+                "Relevant content",
+                "Good engagement"
             ],
             "strengths": [
-                "Strong content relevance"
+                "Strong audience engagement"
             ],
             "concerns": [
-                "Location does not exactly match the campaign"
+                "Location information unavailable"
             ]
         }}
     ]
 }}
-
-Return ALL candidates.
-
-Sort the matches from highest match_score to lowest match_score.
 """
-
 
     response_chunks = []
 
     async for chunk in chat.stream(prompt):
         response_chunks.append(chunk)
 
-    response_text = "".join(response_chunks).strip()
+    response_text = "".join(
+        response_chunks
+    ).strip()
 
     if not response_text:
         raise RuntimeError(
             "LLM returned an empty matching response."
         )
 
-    # Remove accidental markdown JSON fences if the model adds them.
+    # Remove markdown JSON fences if the model adds them
     if response_text.startswith("```"):
-        response_text = response_text.replace(
-            "```json",
-            "",
-            1
-        ).replace(
-            "```",
-            "",
-            1
-        ).strip()
-
-        if response_text.endswith("```"):
-            response_text = response_text[:-3].strip()
+        response_text = (
+            response_text
+            .replace("```json", "")
+            .replace("```", "")
+            .strip()
+        )
 
     try:
         result = json.loads(response_text)
@@ -224,19 +163,17 @@ Sort the matches from highest match_score to lowest match_score.
         list
     ):
         raise RuntimeError(
-            "LLM returned an unexpected response format."
+            "LLM returned an unexpected matches format."
         )
 
-    # ----------------------------------------------------------
-    # Validate LLM results against the actual candidates
-    # ----------------------------------------------------------
-
+    # Only allow IDs that were actually retrieved
     candidate_map = {
         str(candidate["id"]): candidate
         for candidate in candidates
     }
 
     validated_matches = []
+
     seen_ids = set()
 
     for match in result["matches"]:
@@ -248,11 +185,9 @@ Sort the matches from highest match_score to lowest match_score.
             match.get("influencer_id", "")
         )
 
-        # Ignore IDs that were not supplied to the LLM.
         if influencer_id not in candidate_map:
             continue
 
-        # Prevent duplicate influencers.
         if influencer_id in seen_ids:
             continue
 
@@ -261,30 +196,22 @@ Sort the matches from highest match_score to lowest match_score.
                 match.get("match_score")
             )
 
-        except (TypeError, ValueError):
+        except (
+            TypeError,
+            ValueError
+        ):
             continue
 
-        # Keep score within valid range.
-        score = max(
-            0,
-            min(100, score)
-        )
+        if not 0 <= score <= 100:
+            continue
 
-        candidate = candidate_map[influencer_id]
+        seen_ids.add(influencer_id)
 
-        # Determine recommendation ourselves so that
-        # the backend remains consistent.
-        if score >= 90:
-            recommendation = "Excellent Match"
-
-        elif score >= 80:
+        if score >= 80:
             recommendation = "Strong Match"
 
-        elif score >= 70:
-            recommendation = "Good Match"
-
         elif score >= 60:
-            recommendation = "Potential Match"
+            recommendation = "Good Match"
 
         elif score >= 40:
             recommendation = "Moderate Match"
@@ -292,73 +219,9 @@ Sort the matches from highest match_score to lowest match_score.
         else:
             recommendation = "Low Match"
 
-        seen_ids.add(influencer_id)
-
-        validated_matches.append({
-            "influencer_id": candidate["id"],
-            "name": candidate.get("name"),
-            "username": candidate.get("username"),
-            "platform": candidate.get("platform"),
-            "niche": candidate.get("niche"),
-            "location": candidate.get("location"),
-            "followers": candidate.get("followers"),
-            "average_views": candidate.get("average_views"),
-            "engagement_rate": candidate.get(
-                "engagement_rate"
-            ),
-            "profile_url": candidate.get(
-                "profile_url"
-            ),
-            "similarity": candidate.get(
-                "similarity"
-            ),
-            "match_score": round(score, 2),
-            "recommendation": recommendation,
-            "reasons": (
-                match.get("reasons", [])
-                if isinstance(
-                    match.get("reasons", []),
-                    list
-                )
-                else []
-            ),
-            "strengths": (
-                match.get("strengths", [])
-                if isinstance(
-                    match.get("strengths", []),
-                    list
-                )
-                else []
-            ),
-            "concerns": (
-                match.get("concerns", [])
-                if isinstance(
-                    match.get("concerns", []),
-                    list
-                )
-                else []
-            )
-        })
-
-    # ----------------------------------------------------------
-    # SAFETY NET
-    # ----------------------------------------------------------
-    # If the LLM accidentally omitted some candidates,
-    # don't silently lose them.
-    #
-    # We add them back as lower-ranked candidates.
-    # Their score is intentionally conservative because
-    # the LLM did not provide an evaluation.
-    # ----------------------------------------------------------
-
-    for candidate in candidates:
-
-        candidate_id = str(
-            candidate["id"]
-        )
-
-        if candidate_id in seen_ids:
-            continue
+        candidate = candidate_map[
+            influencer_id
+        ]
 
         validated_matches.append({
             "influencer_id": candidate["id"],
@@ -380,20 +243,28 @@ Sort the matches from highest match_score to lowest match_score.
             "similarity": candidate.get(
                 "similarity"
             ),
-            "match_score": 0,
-            "recommendation": "Low Match",
-            "reasons": [
-                "Candidate was retrieved but was not fully evaluated by the AI."
-            ],
-            "strengths": [],
-            "concerns": [
-                "AI evaluation was unavailable for this candidate."
-            ]
+            "match_score": round(
+                score,
+                2
+            ),
+            "recommendation": recommendation,
+            "reasons": match.get(
+                "reasons",
+                []
+            ),
+            "strengths": match.get(
+                "strengths",
+                []
+            ),
+            "concerns": match.get(
+                "concerns",
+                []
+            )
         })
 
-    # Highest score first.
     validated_matches.sort(
-        key=lambda item: item["match_score"],
+        key=lambda item:
+        item["match_score"],
         reverse=True
     )
 
@@ -404,17 +275,11 @@ async def match_influencers_to_campaign(
     campaign: dict,
     limit: int = 10
 ) -> dict:
-    """
-    Retrieve a broad pool of influencers and rank them using AI.
 
-    IMPORTANT:
-    Retrieval filters are intentionally relaxed here.
-
-    Followers, engagement and location are used by the AI as
-    ranking factors instead of hard exclusion filters.
-    """
-
-    if not isinstance(campaign, dict):
+    if not isinstance(
+        campaign,
+        dict
+    ):
         raise ValueError(
             "Campaign must be provided as a dictionary."
         )
@@ -424,26 +289,32 @@ async def match_influencers_to_campaign(
             "Limit must be between 1 and 50."
         )
 
-    query = build_campaign_query(campaign)
+    query = build_campaign_query(
+        campaign
+    )
 
-    # ----------------------------------------------------------
-    # STEP 1
-    # Broad semantic / hybrid retrieval
-    # ----------------------------------------------------------
+    # --------------------------------------------------
+    # RETRIEVAL
+    # --------------------------------------------------
     #
-    # Do NOT pass campaign follower / engagement / location
-    # requirements as hard retrieval filters.
+    # IMPORTANT:
+    # We intentionally DO NOT hard-filter by:
     #
-    # We want to give the AI a broad candidate pool and let
-    # the scoring stage determine relevance.
+    #   niche
+    #   location
     #
-    # This is especially important because your database currently
-    # contains only a small number of influencers.
-    # ----------------------------------------------------------
+    # because these fields may be missing or formatted
+    # differently in the influencer database.
+    #
+    # The semantic search + AI ranking will evaluate
+    # these requirements instead.
+    #
+    # We only use objective numeric filters here.
+    # --------------------------------------------------
 
     retrieval_limit = max(
-        limit,
-        30
+        30,
+        limit * 3
     )
 
     retrieval_limit = min(
@@ -454,16 +325,27 @@ async def match_influencers_to_campaign(
     candidates = hybrid_search_influencers(
         query=query,
 
-        # Keep these broad.
+        # Do NOT hard-filter niche
         niche=None,
-        platform=None,
+
+        # Do NOT hard-filter location
         location=None,
 
-        # IMPORTANT:
-        # Do not hard-filter by followers or engagement here.
-        min_followers=None,
-        max_followers=None,
-        min_engagement=None,
+        platform=campaign.get(
+            "platform"
+        ),
+
+        min_followers=campaign.get(
+            "min_followers"
+        ),
+
+        max_followers=campaign.get(
+            "max_followers"
+        ),
+
+        min_engagement=campaign.get(
+            "min_engagement"
+        ),
 
         limit=retrieval_limit
     )
@@ -471,28 +353,26 @@ async def match_influencers_to_campaign(
     if not candidates:
         return {
             "message": (
-                "No influencers were found in the "
-                "retrieval database."
+                "No influencers matched "
+                "the retrieval filters."
             ),
             "candidates_considered": 0,
             "matches_returned": 0,
             "matches": []
         }
 
-    # ----------------------------------------------------------
-    # STEP 2
-    # AI evaluates the entire retrieved candidate pool.
-    # ----------------------------------------------------------
+    # --------------------------------------------------
+    # AI EVALUATION
+    # --------------------------------------------------
 
     matches = await evaluate_influencer_matches(
         campaign=campaign,
         candidates=candidates
     )
 
-    # ----------------------------------------------------------
-    # STEP 3
-    # Return the requested number of ranked results.
-    # ----------------------------------------------------------
+    # --------------------------------------------------
+    # FINAL RESULTS
+    # --------------------------------------------------
 
     final_matches = matches[:limit]
 
@@ -500,7 +380,11 @@ async def match_influencers_to_campaign(
         "message": (
             "AI influencer matching completed."
         ),
-        "candidates_considered": len(candidates),
-        "matches_returned": len(final_matches),
+        "candidates_considered": len(
+            candidates
+        ),
+        "matches_returned": len(
+            final_matches
+        ),
         "matches": final_matches
     }

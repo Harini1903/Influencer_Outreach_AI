@@ -13,13 +13,17 @@ from app.schemas.influencer import (
     InfluencerResponse
 )
 
+
 router = APIRouter(
     prefix="/influencers",
     tags=["Influencers"]
 )
 
 
+# ============================================================
 # CREATE INFLUENCER
+# ============================================================
+
 @router.post(
     "/",
     response_model=InfluencerResponse,
@@ -57,6 +61,7 @@ def create_influencer(
 
     except IntegrityError:
         db.rollback()
+
         raise HTTPException(
             status_code=409,
             detail="Influencer already exists"
@@ -65,8 +70,14 @@ def create_influencer(
     return influencer
 
 
+# ============================================================
 # GET ALL INFLUENCERS
-@router.get("/", response_model=list[InfluencerResponse])
+# ============================================================
+
+@router.get(
+    "/",
+    response_model=list[InfluencerResponse]
+)
 def get_influencers(
     skip: int = 0,
     limit: int = 50,
@@ -83,14 +94,23 @@ def get_influencers(
     return influencers
 
 
+# ============================================================
 # GET INFLUENCER BY ID
-@router.get("/{influencer_id}", response_model=InfluencerResponse)
+# ============================================================
+
+@router.get(
+    "/{influencer_id}",
+    response_model=InfluencerResponse
+)
 def get_influencer(
     influencer_id: int,
     db: Session = Depends(get_db)
 ):
 
-    influencer = db.get(Influencer, influencer_id)
+    influencer = db.get(
+        Influencer,
+        influencer_id
+    )
 
     if not influencer:
         raise HTTPException(
@@ -101,15 +121,24 @@ def get_influencer(
     return influencer
 
 
+# ============================================================
 # UPDATE INFLUENCER
-@router.put("/{influencer_id}", response_model=InfluencerResponse)
+# ============================================================
+
+@router.put(
+    "/{influencer_id}",
+    response_model=InfluencerResponse
+)
 def update_influencer(
     influencer_id: int,
     influencer_data: InfluencerUpdate,
     db: Session = Depends(get_db)
 ):
 
-    influencer = db.get(Influencer, influencer_id)
+    influencer = db.get(
+        Influencer,
+        influencer_id
+    )
 
     if not influencer:
         raise HTTPException(
@@ -117,15 +146,24 @@ def update_influencer(
             detail="Influencer not found"
         )
 
-    update_data = influencer_data.model_dump(exclude_unset=True)
+    update_data = influencer_data.model_dump(
+        exclude_unset=True
+    )
 
     for key, value in update_data.items():
+
         if key == "profile_url" and value is not None:
             value = str(value)
 
-        setattr(influencer, key, value)
+        setattr(
+            influencer,
+            key,
+            value
+        )
 
-    influencer.updated_at = datetime.now(timezone.utc)
+    influencer.updated_at = datetime.now(
+        timezone.utc
+    )
 
     try:
         db.commit()
@@ -133,22 +171,34 @@ def update_influencer(
 
     except IntegrityError:
         db.rollback()
+
         raise HTTPException(
             status_code=409,
-            detail="Unable to update influencer due to a database conflict"
+            detail=(
+                "Unable to update influencer "
+                "due to a database conflict"
+            )
         )
 
     return influencer
 
 
+# ============================================================
 # DELETE INFLUENCER
-@router.delete("/{influencer_id}")
+# ============================================================
+
+@router.delete(
+    "/{influencer_id}"
+)
 def delete_influencer(
     influencer_id: int,
     db: Session = Depends(get_db)
 ):
 
-    influencer = db.get(Influencer, influencer_id)
+    influencer = db.get(
+        Influencer,
+        influencer_id
+    )
 
     if not influencer:
         raise HTTPException(
