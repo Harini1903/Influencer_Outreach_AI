@@ -23,7 +23,7 @@ class CampaignMatchRequest(BaseModel):
     max_followers: int | None = Field(default=None, ge=0)
     min_engagement: float | None = Field(default=None, ge=0)
 
-    limit: int = Field(default=10, ge=1, le=50)
+    limit: int = Field(default=30, ge=1, le=50)
 
 
 @router.post("/match")
