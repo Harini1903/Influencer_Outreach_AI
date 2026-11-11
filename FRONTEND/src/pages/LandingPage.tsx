@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { Navbar } from '../components/layout/Navbar';
+import heroImage from '../assets/images/influencer_hero_creators_1794287391421.jpg';
 import {
   Compass,
   Cpu,
@@ -89,9 +90,8 @@ export const LandingPage: React.FC = () => {
               {/* Preview Content Banner with high quality generated image */}
               <div className="relative h-64 sm:h-80 md:h-96 overflow-hidden">
                 <img
-                  src="/src/assets/images/influencer_hero_creators_1794287391421.jpg"
+                  src={heroImage}
                   alt="Influencer Outreach AI Platform Preview"
-                  referrerPolicy="no-referrer"
                   className="w-full h-full object-cover object-center filter brightness-90 contrast-105"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#0d1322] via-[#0d1322]/40 to-transparent" />
