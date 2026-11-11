@@ -184,7 +184,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
               }}
             />
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-white truncate">Elena Vance</p>
+              <p className="text-xs font-semibold text-white truncate">Harini</p>
               <p className="text-[11px] text-slate-400 truncate">Marketing Director</p>
             </div>
             <button

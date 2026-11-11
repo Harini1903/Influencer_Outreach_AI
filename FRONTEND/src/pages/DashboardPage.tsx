@@ -87,7 +87,7 @@ export const DashboardPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight font-['Outfit']">
-            Good morning 👋
+            Welcome
           </h1>
           <p className="text-sm text-slate-400 mt-1">
             Here's what's happening with your influencer campaigns.
