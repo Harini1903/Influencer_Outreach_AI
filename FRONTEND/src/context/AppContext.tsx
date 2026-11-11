@@ -103,36 +103,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshData = useCallback(async () => {
     setLoadingData(true);
     setBackendError(null);
-    try {
-      const [healthOk, influencersList, campaignsList] = await Promise.allSettled([
-        api.checkHealth(),
-        api.getInfluencers(0, 100),
-        api.getCampaigns(),
-      ]);
 
-      if (healthOk.status === 'fulfilled') {
+    try {
+      const [healthResult, influencersResult, campaignsResult] =
+        await Promise.allSettled([
+          api.checkHealth(),
+          api.getInfluencers(0, 100),
+          api.getCampaigns(),
+        ]);
+
+      const healthOk =
+        healthResult.status === 'fulfilled' &&
+        healthResult.value.status === 'healthy';
+
+      const dataOk =
+        influencersResult.status === 'fulfilled' ||
+        campaignsResult.status === 'fulfilled';
+
+      // If health OR actual backend API data responds,
+      // consider the backend connected.
+      if (healthOk || dataOk) {
         setBackendConnected(true);
+        setBackendError(null);
       } else {
         setBackendConnected(false);
-        setBackendError('Backend instance on Render is starting up or unreachable.');
+        setBackendError(
+          'Backend instance on Render is starting up or unreachable.'
+        );
       }
 
-      if (influencersList.status === 'fulfilled') {
-        setInfluencers(influencersList.value);
+      if (influencersResult.status === 'fulfilled') {
+        setInfluencers(influencersResult.value);
       }
 
-      if (campaignsList.status === 'fulfilled') {
-        setRawCampaigns(campaignsList.value);
+      if (campaignsResult.status === 'fulfilled') {
+        setRawCampaigns(campaignsResult.value);
       }
     } catch (err: unknown) {
+      setBackendConnected(false);
+
       if (err instanceof ApiError) {
         setBackendError(err.message);
+      } else {
+        setBackendError('Backend unreachable');
       }
     } finally {
       setLoadingData(false);
     }
   }, []);
-
+  
   const dismissCampaign = useCallback((id: number) => {
     setDismissedCampaignIds((prev) => {
       const next = [...new Set([...prev, id])];
